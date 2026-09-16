@@ -113,7 +113,7 @@ def eval_model(model, loaders, device, dataset_names):
                  if y.dim() == 2:
                      kwargs['classification'] = False
             
-            logits, _, _ = model(x, **kwargs)
+            logits, _, _, _, _, _ = model(x, **kwargs)
             
             if logits.dim() == 3: # Sequence
                 pred = logits.argmax(2) # (B, L)

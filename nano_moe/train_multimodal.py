@@ -120,6 +120,58 @@ class DecoderOnlyLM(nn.Module):
 
 
 # =============================================================================
+# Simple Text Encoder for External Vocabularies
+# =============================================================================
+
+class SimpleTextEncoder(nn.Module):
+    """Simple text encoder that works with external vocabularies."""
+    
+    def __init__(self, vocab_size, emb_dim=128, n_heads=4, n_layers=2, max_len=16):
+        super().__init__()
+        self.vocab_size = vocab_size
+        self.max_len = max_len
+        
+        self.embed = nn.Embedding(vocab_size, emb_dim, padding_idx=0)
+        self.pos_embed = nn.Parameter(torch.randn(1, max_len, emb_dim) * 0.01)
+        self.dropout = nn.Dropout(0.1)
+        
+        encoder_layer = nn.TransformerEncoderLayer(
+            d_model=emb_dim, nhead=n_heads, dim_feedforward=emb_dim*4,
+            batch_first=True, norm_first=True, dropout=0.1
+        )
+        self.encoder = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+        
+        self.fc = nn.Sequential(
+            nn.Linear(emb_dim, emb_dim),
+            nn.ReLU(),
+            nn.Linear(emb_dim, emb_dim)
+        )
+    
+    def forward(self, token_ids):
+        """
+        Args:
+            token_ids: (B, L) tensor of token ids
+        Returns:
+            z: (B, emb_dim) L2-normalized embeddings
+        """
+        # Create attention mask for padding
+        mask = (token_ids == 0)
+        
+        x = self.embed(token_ids) + self.pos_embed[:, :token_ids.size(1)]
+        x = self.dropout(x)
+        
+        h = self.encoder(x, src_key_padding_mask=mask)
+        
+        # Mean pooling (excluding padding)
+        mask_expanded = mask.unsqueeze(-1).expand_as(h)
+        h_masked = h.masked_fill(mask_expanded, 0)
+        pooled = h_masked.sum(dim=1) / (~mask).sum(dim=1, keepdim=True).float().clamp(min=1)
+        
+        z = self.fc(pooled)
+        return F.normalize(z, dim=-1)
+
+
+# =============================================================================
 # Extended Multimodal Model with Text-to-Text
 # =============================================================================
 
@@ -145,8 +197,7 @@ class ExtendedMultimodal(nn.Module):
         
         # Vision-language
         self.img_enc = EnhancedImageEncoder(emb_dim)
-        self.txt_enc = EnhancedTextEncoder([], emb_dim, max_len=max_len)
-        self.txt_enc.vocab_size = vocab_size
+        self.txt_enc = SimpleTextEncoder(vocab_size, emb_dim, max_len=max_len)
         self.cap_dec = CaptionDecoder(vocab_size, d_model=emb_dim, max_len=max_len)
         
         # Decoder-only LM for text→text

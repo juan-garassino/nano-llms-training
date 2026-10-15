@@ -76,12 +76,10 @@ def run(args, name: str, text_moe: bool) -> dict:
     k = min(20, len(steps) // 2)
 
     # Checkpoint round trip into a freshly constructed model.
-    meta_model_cfg = None
     ckpt_path = os.path.join(save_dir, "models", "last.pt")
     probe = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-    meta_model_cfg = probe["cfg"]
     chars = probe["extra"]["chars"]
-    fresh = build_model(meta_model_cfg, len(chars))
+    fresh = build_model(probe["cfg"], len(chars))
     load_checkpoint(ckpt_path, fresh)
     model.eval(); fresh.eval()
     tok = CharTokenizer("".join(chars))

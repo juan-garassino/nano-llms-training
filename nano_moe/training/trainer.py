@@ -1,3 +1,5 @@
+import inspect
+
 import torch
 import numpy as np
 from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TaskProgressColumn
@@ -9,9 +11,30 @@ try:
 except ImportError:
     RICH_AVAILABLE = False
 
-def train_epoch(model, loaders, optimizer, criterion, device, dataset_names, tracker, epoch):
+def _forward_kwargs(model, y):
+    """Pass ``classification=False`` to models that accept it when targets are sequences."""
+    if 'classification' in inspect.signature(model.forward).parameters and y.dim() == 2:
+        return {'classification': False}
+    return {}
+
+
+def train_epoch(model, loaders, optimizer, criterion, device, dataset_names, tracker, epoch,
+                max_steps=None, aux_weight=0.01):
+    """Run one epoch, stepping through all datasets in lock-step.
+
+    Args:
+        max_steps: Optional cap on optimizer steps (used for short CPU runs).
+        aux_weight: Weight of the model's auxiliary (e.g. MoE load-balancing) loss.
+
+    Returns:
+        (losses, gates, thinking): per-step total loss, per-step mean gate
+        vector (``torch.zeros(1)`` for models without a router) and per-step
+        reflective-thinking depth.
+    """
     model.train()
     steps = min(len(loaders[name]["train_loader"]) for name in dataset_names)
+    if max_steps is not None:
+        steps = min(steps, max_steps)
     iters = {name: iter(loaders[name]["train_loader"]) for name in dataset_names}
     
     all_losses = []
@@ -41,32 +64,15 @@ def train_epoch(model, loaders, optimizer, criterion, device, dataset_names, tra
 
             x, y = x.to(device), y.to(device)
             
-            # Forward pass with new return values
-            # Check if model is SFPT and we are doing text generation (dataset_names[0] is text)
-            # We can infer from logits shape.
-            
-            # For SFPT text, we pass classification=False
-            is_text_gen = (logits.dim() == 3) if 'logits' in locals() else False # Can't check before forward
-            
-            # We need to pass classification=False if it's text.
-            # But train_epoch is generic.
-            # Let's check if the model has 'classification' arg in forward.
-            import inspect
-            forward_params = inspect.signature(model.forward).parameters
-            kwargs = {'return_attention': True}
-            if 'classification' in forward_params:
-                 # Heuristic: if y has shape (B, L), it's sequence task
-                 if y.dim() == 2:
-                     kwargs['classification'] = False
-            
+            kwargs = {'return_attention': True, **_forward_kwargs(model, y)}
             logits, aux, gate, _, _, think_stats = model(x, idx, **kwargs)
             
             if logits.dim() == 3: # (B, L, V)
                 # Flatten for CrossEntropyLoss
                 B, L, V = logits.shape
-                loss = criterion(logits.view(-1, V), y.view(-1)) + 0.01 * aux
+                loss = criterion(logits.reshape(-1, V), y.reshape(-1)) + aux_weight * aux
             else:
-                loss = criterion(logits, y) + 0.01 * aux
+                loss = criterion(logits, y) + aux_weight * aux
                 
             total_loss += loss
             
@@ -96,24 +102,30 @@ def train_epoch(model, loaders, optimizer, criterion, device, dataset_names, tra
     return all_losses, all_gates, all_thinking
 
 @torch.no_grad()
-def eval_model(model, loaders, device, dataset_names):
+def eval_model(model, loaders, device, dataset_names, max_batches=None, losses=None):
+    """Accuracy per dataset on its ``test_loader`` (token accuracy for sequence targets).
+
+    Args:
+        max_batches: Optional cap on evaluated batches per dataset.
+        losses: Optional dict; if given it is filled with the mean
+            cross-entropy per dataset.
+    """
     model.eval()
     accs = {}
     for name in dataset_names:
         loader = loaders[name]["test_loader"]
         correct, total = 0, 0
-        for x, y in loader:
+        loss_sum, loss_n = 0.0, 0
+        for b, (x, y) in enumerate(loader):
+            if max_batches is not None and b >= max_batches:
+                break
             x, y = x.to(device), y.to(device)
             
-            # Handle classification flag
-            import inspect
-            forward_params = inspect.signature(model.forward).parameters
-            kwargs = {}
-            if 'classification' in forward_params:
-                 if y.dim() == 2:
-                     kwargs['classification'] = False
-            
-            logits, _, _ = model(x, **kwargs)
+            # Models return 3- or 6-tuples; logits are always first.
+            logits = model(x, **_forward_kwargs(model, y))[0]
+            loss_sum += torch.nn.functional.cross_entropy(
+                logits.reshape(-1, logits.size(-1)), y.reshape(-1), reduction='sum').item()
+            loss_n += y.numel()
             
             if logits.dim() == 3: # Sequence
                 pred = logits.argmax(2) # (B, L)
@@ -124,4 +136,6 @@ def eval_model(model, loaders, device, dataset_names):
                 correct += (pred==y).sum().item()
                 total += y.size(0)
         accs[name] = correct/total
+        if losses is not None:
+            losses[name] = loss_sum / loss_n
     return accs

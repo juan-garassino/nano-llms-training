@@ -11,14 +11,27 @@ class TrainingConfig:
     hidden_dim: int = 256
     # Data
     dataset_type: str = "text" # "image" or "text" or "arc"
-    dataset_names: list = field(default_factory=lambda: ["tinyshakespeare"]) # ["mnist", "fashionmnist"] or ["wikitext"]
+    # ["mnist", "fashionmnist"], ["wikitext"], or a path to a local text file
+    # (e.g. ["input.txt"]), which is loaded character-level without downloads.
+    dataset_names: list = field(default_factory=lambda: ["tinyshakespeare"])
     batch_size: int = 32 # Reduced for text sequence length
     seq_len: int = 128 # For text
     save_dir: str = "results/shakespeare"
     num_workers: int = 0
     
+    # Short-run controls (None = full epoch / full validation set)
+    max_steps_per_epoch: Optional[int] = None
+    max_eval_batches: Optional[int] = None
+    max_chars: Optional[int] = None # Truncate a local text file (char-level data only)
+    
     # Model
     model_type: str = "moe" # "moe", "phase", "phase_symbolic", "true_phase", "universal_phase", "quantum_diffusion"
+    
+    # Text MoE: when True, model_type="moe" on text uses top-k MoE feed-forward
+    # layers with `experts` experts; False keeps the dense SimpleTransformer.
+    text_moe: bool = False
+    expert_k: int = 2
+    aux_weight: float = 0.01 # Weight of the load-balancing loss
     
     # SFPT Params
     n_freqs: int = 2048

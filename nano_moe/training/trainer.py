@@ -19,12 +19,13 @@ def _forward_kwargs(model, y):
 
 
 def train_epoch(model, loaders, optimizer, criterion, device, dataset_names, tracker, epoch,
-                max_steps=None, aux_weight=0.01):
+                max_steps=None, aux_weight=0.01, grad_clip=None):
     """Run one epoch, stepping through all datasets in lock-step.
 
     Args:
         max_steps: Optional cap on optimizer steps (used for short CPU runs).
         aux_weight: Weight of the model's auxiliary (e.g. MoE load-balancing) loss.
+        grad_clip: Optional max global gradient norm.
 
     Returns:
         (losses, gates, thinking): per-step total loss, per-step mean gate
@@ -84,6 +85,8 @@ def train_epoch(model, loaders, optimizer, criterion, device, dataset_names, tra
                 batch_think.append(think_stats['iterations_used'].mean().item())
 
         total_loss.backward()
+        if grad_clip is not None:
+            torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip)
         optimizer.step()
         
         all_losses.append(total_loss.item())

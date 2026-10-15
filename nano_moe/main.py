@@ -153,7 +153,8 @@ def main(cfg: Optional[TrainingConfig] = None):
     # Training Loop
     for epoch in range(1, cfg.epochs + 1):
         losses, gates, thinking = train_epoch(model, loaders, optimizer, criterion, device, cfg.dataset_names, tracker, epoch,
-                                              max_steps=cfg.max_steps_per_epoch, aux_weight=cfg.aux_weight)
+                                              max_steps=cfg.max_steps_per_epoch, aux_weight=cfg.aux_weight,
+                                              grad_clip=cfg.grad_clip)
         
         val_losses = {}
         accs = eval_model(model, loaders, device, cfg.dataset_names,

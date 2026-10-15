@@ -32,6 +32,7 @@ class TrainingConfig:
     text_moe: bool = False
     expert_k: int = 2
     aux_weight: float = 0.01 # Weight of the load-balancing loss
+    grad_clip: Optional[float] = 1.0 # Max global grad norm (None disables)
     
     # SFPT Params
     n_freqs: int = 2048

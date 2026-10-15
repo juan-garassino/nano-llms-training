@@ -8,6 +8,8 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
+from .moe import MoEFeedForward
+
 
 class PositionalEncoding(nn.Module):
     """Standard positional encoding."""
@@ -26,6 +28,23 @@ class PositionalEncoding(nn.Module):
         return x + self.pe[:x.size(0), :]
 
 
+class MoEBlock(nn.Module):
+    """Pre-norm causal transformer block whose feed-forward is a :class:`MoEFeedForward`."""
+
+    def __init__(self, d_model, n_heads, d_ff, num_experts, k, dropout):
+        super().__init__()
+        self.ln1 = nn.LayerNorm(d_model)
+        self.attn = nn.MultiheadAttention(d_model, n_heads, dropout=dropout, batch_first=True)
+        self.ln2 = nn.LayerNorm(d_model)
+        self.moe = MoEFeedForward(d_model, d_ff, num_experts=num_experts, k=k, dropout=dropout)
+        self.dropout = nn.Dropout(dropout)
+
+    def forward(self, x, mask):
+        h = self.ln1(x)
+        x = x + self.dropout(self.attn(h, h, h, attn_mask=mask, need_weights=False)[0])
+        return x + self.moe(self.ln2(x))
+
+
 class SimpleTransformer(nn.Module):
     """
     Simple GPT-style transformer for language modeling.
@@ -38,13 +57,18 @@ class SimpleTransformer(nn.Module):
         d_ff: Feed-forward dimension
         max_len: Maximum sequence length
         dropout: Dropout rate
+        num_experts: If > 0, replace every dense feed-forward with a top-k
+            mixture-of-experts layer (:class:`MoEFeedForward`). 0 keeps the
+            dense ``nn.TransformerEncoder`` stack.
+        expert_k: Experts used per token when ``num_experts > 0``.
     """
     
     def __init__(self, vocab_size, d_model=256, n_heads=8, n_layers=6, 
-                 d_ff=1024, max_len=512, dropout=0.1):
+                 d_ff=1024, max_len=512, dropout=0.1, num_experts=0, expert_k=2):
         super().__init__()
         self.d_model = d_model
         self.max_len = max_len
+        self.num_experts = num_experts
         
         # Token and position embeddings
         self.token_embedding = nn.Embedding(vocab_size, d_model)
@@ -52,15 +76,21 @@ class SimpleTransformer(nn.Module):
         self.dropout = nn.Dropout(dropout)
         
         # Transformer layers
-        encoder_layer = nn.TransformerEncoderLayer(
-            d_model=d_model,
-            nhead=n_heads,
-            dim_feedforward=d_ff,
-            dropout=dropout,
-            batch_first=True,
-            norm_first=True  # Pre-norm like GPT
-        )
-        self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers)
+        if num_experts > 0:
+            self.blocks = nn.ModuleList([
+                MoEBlock(d_model, n_heads, d_ff, num_experts, expert_k, dropout) for _ in range(n_layers)
+            ])
+        else:
+            encoder_layer = nn.TransformerEncoderLayer(
+                d_model=d_model,
+                nhead=n_heads,
+                dim_feedforward=d_ff,
+                dropout=dropout,
+                batch_first=True,
+                norm_first=True  # Pre-norm like GPT
+            )
+            # Nested tensors are unsupported with norm_first; disabling avoids a warning.
+            self.transformer = nn.TransformerEncoder(encoder_layer, num_layers=n_layers, enable_nested_tensor=False)
         
         # Output projection
         self.ln_f = nn.LayerNorm(d_model)
@@ -96,8 +126,8 @@ class SimpleTransformer(nn.Module):
             
         Returns:
             logits: Output logits (B, L, vocab_size) for text, (B, vocab_size) for classification
-            aux_loss: Auxiliary loss (0 for compatibility)
-            gate: Gate values (None for compatibility)
+            aux_loss: Mean MoE load-balancing loss over layers (0 for the dense model)
+            gate: Mean per-expert usage fraction over layers (None for the dense model)
             attention: Attention weights (None for compatibility)
             hidden: Hidden states (None for compatibility)  
             think_stats: Thinking statistics (None for compatibility)
@@ -115,15 +145,22 @@ class SimpleTransformer(nn.Module):
         causal_mask = torch.triu(torch.ones(L, L, device=x.device), diagonal=1).bool()
         
         # Transformer
-        hidden = self.transformer(x_emb, mask=causal_mask)
+        if self.num_experts > 0:
+            hidden = x_emb
+            for block in self.blocks:
+                hidden = block(hidden, causal_mask)
+            aux_loss = torch.stack([b.moe.aux_loss for b in self.blocks]).mean()
+            gate = torch.stack([b.moe.expert_usage for b in self.blocks]).mean(0)
+        else:
+            hidden = self.transformer(x_emb, mask=causal_mask)
+            aux_loss = torch.tensor(0.0, device=x.device)
+            gate = None
         
         # Output
         hidden = self.ln_f(hidden)
         logits = self.head(hidden)
         
         # For compatibility with trainer expectations
-        aux_loss = torch.tensor(0.0, device=x.device)
-        gate = None
         attention = None
         think_stats = None
         
@@ -145,7 +182,7 @@ class SimpleTransformer(nn.Module):
             device: Device to run on
             
         Returns:
-            Generated token sequence
+            Prompt followed by ``max_new_tokens`` generated tokens (1-D tensor)
         """
         self.eval()
         
@@ -157,12 +194,12 @@ class SimpleTransformer(nn.Module):
                 tokens = tokens.unsqueeze(0)
         
         for _ in range(max_new_tokens):
-            # Crop to max_len if needed
-            if tokens.size(1) > self.max_len:
-                tokens = tokens[:, -self.max_len:]
+            # Only the model input is cropped to the context window; the
+            # returned sequence keeps every generated token.
+            context = tokens[:, -self.max_len:]
             
             # Forward pass
-            logits, _, _, _, _, _ = self.forward(tokens, classification=False)
+            logits, _, _, _, _, _ = self.forward(context, classification=False)
             logits = logits[:, -1, :] / temperature
             
             # Apply top-k filtering

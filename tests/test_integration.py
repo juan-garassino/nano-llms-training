@@ -1,64 +1,49 @@
-import sys
-import os
-import torch
+"""End-to-end runs of ``nano_moe.main.main`` on a slice of the local ``input.txt``.
 
-# Ensure we can import nano_moe
-sys.path.append(os.getcwd())
+These used to wrap each run in ``try/except`` and print the error, so pytest
+reported them as passing even when every run failed. They now fail on error.
+"""
+
+import math
+import os
+
+import pytest
 
 from nano_moe.config import TrainingConfig
-from nano_moe.datasets.loaders import get_multimnist_loaders
 from nano_moe.main import main
 
-def test_universal_phase():
-    print("\n=== Testing Universal SFPT Integration ===")
-    cfg = TrainingConfig()
-    cfg.model_type = "universal_phase"
-    cfg.epochs = 1
-    cfg.dataset_names = ["tinyshakespeare"]
-    cfg.batch_size = 2
-    cfg.seq_len = 32
-    
-    try:
-        main(cfg)
-        print("✅ Universal SFPT Integration Test Passed")
-    except Exception as e:
-        print(f"❌ Universal SFPT Integration Test Failed: {e}")
-        import traceback
-        traceback.print_exc()
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+INPUT = os.path.join(ROOT, "input.txt")
 
-def test_true_phase():
-    print("\n=== Testing True Holographic SFPT Integration ===")
-    cfg = TrainingConfig()
-    cfg.model_type = "true_phase"
-    cfg.epochs = 1
-    cfg.dataset_names = ["tinyshakespeare"]
-    cfg.batch_size = 2
-    cfg.seq_len = 32
-    
-    try:
-        main(cfg)
-        print("✅ True Holographic SFPT Integration Test Passed")
-    except Exception as e:
-        print(f"❌ True Holographic SFPT Integration Test Failed: {e}")
-        import traceback
-        traceback.print_exc()
 
-if __name__ == "__main__":
-    test_universal_phase()
-    test_true_phase()
-    test_quantum_diffusion()
+def tiny_cfg(tmp_path, model_type, **kw):
+    cfg = TrainingConfig(
+        model_type=model_type, epochs=1, dataset_type="text", dataset_names=[INPUT],
+        max_chars=20_000, batch_size=4, seq_len=32, feature_dim=32, hidden_dim=64,
+        depth=1, n_heads=4, n_freqs=64, max_steps_per_epoch=3, max_eval_batches=2,
+        save_dir=str(tmp_path),
+    )
+    for k, v in kw.items():
+        setattr(cfg, k, v)
+    return cfg
 
-def test_quantum_diffusion():
-    print("\n=== Testing Quantum Diffusion ARC Integration ===")
-    cfg = TrainingConfig()
-    cfg.model_type = "quantum_diffusion"
-    # Quantum Diffusion uses its own internal loop, so epochs/batch_size in cfg might be ignored or used differently
-    # But we pass them anyway.
-    
-    try:
-        main(cfg)
-        print("✅ Quantum Diffusion ARC Integration Test Passed")
-    except Exception as e:
-        print(f"❌ Quantum Diffusion ARC Integration Test Failed: {e}")
-        import traceback
-        traceback.print_exc()
+
+@pytest.mark.parametrize("model_type,kw", [
+    ("moe", {}),
+    ("moe", {"text_moe": True}),
+    ("universal_phase", {}),
+    ("true_phase", {}),
+])
+def test_main_text_pipeline(tmp_path, model_type, kw):
+    model, history = main(tiny_cfg(tmp_path, model_type, **kw))
+    assert len(history["step_losses"]) == 3
+    assert all(math.isfinite(v) for v in history["step_losses"] + history["val_loss"])
+    assert (tmp_path / "models" / "last.pt").exists()
+    assert (tmp_path / "data" / "training_metrics.json").exists()
+
+
+@pytest.mark.skipif(os.environ.get("NANO_MOE_NETWORK_TESTS") != "1",
+                    reason="downloads ARC data; set NANO_MOE_NETWORK_TESTS=1 to run")
+def test_quantum_diffusion(tmp_path):
+    # main() loads the (local) text data first, then dispatches to the ARC loop.
+    main(tiny_cfg(tmp_path, "quantum_diffusion"))

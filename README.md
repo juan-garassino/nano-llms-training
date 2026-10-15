@@ -118,10 +118,10 @@ Train a **single model** that can:
 ```bash
 # Clone the repository
 git clone <repo-url>
-cd nano_llms_me
+cd nano-llms-training
 
 # Install dependencies
-pip install torch torchvision transformers datasets rich matplotlib seaborn einops
+pip install torch torchvision transformers datasets rich matplotlib seaborn einops pytest
 
 # Fix NumPy version mismatch (if needed)
 pip install "numpy<2"
@@ -164,6 +164,35 @@ jupyter notebook notebooks/Train_ARC.ipynb
 
 # Multimodal training & inference (with oscillation!)
 jupyter notebook notebooks/Train_Multimodal.ipynb
+```
+
+### Tests and CPU evals
+
+Everything below runs offline on CPU using the bundled `input.txt` (Tiny Shakespeare).
+
+```bash
+make test        # pytest: unit tests + short end-to-end runs of nano_moe.main
+make eval-cpu    # ~2 min: dense vs. MoE char-level LM, 300 steps each
+make eval-moe    # ~1 min: IntegratedMoE on a synthetic 10-class image task
+```
+
+`evals/cpu_eval.py` trains a dense (~0.54M params) and an MoE (~1.33M params,
+4 experts, top-2) character-level LM through `nano_moe.main.main`, then checks
+that the training loss drops, validation loss is below the uniform baseline,
+experts are used in a balanced way, a reloaded checkpoint reproduces the
+logits and generation returns the requested number of tokens. Metrics are
+written to `results/cpu_eval/metrics.json`.
+
+To train a small LM yourself on a local text file (no downloads):
+
+```python
+from nano_moe.config import TrainingConfig
+from nano_moe.main import main
+
+cfg = TrainingConfig(dataset_names=["input.txt"], text_moe=True, experts=4, expert_k=2,
+                     feature_dim=128, hidden_dim=256, depth=4, n_heads=4, seq_len=64,
+                     lr=3e-3, epochs=1, max_steps_per_epoch=300)
+model, history = main(cfg)   # weights in results/shakespeare/models/last.pt
 ```
 
 ---
@@ -277,7 +306,7 @@ nano_moe/
 ├── models/
 │   ├── attention.py             # ContinuousAttention (S4-inspired)
 │   ├── reflection.py            # ReflectiveAttentionBlock
-│   ├── moe.py                   # Mixture of Experts
+│   ├── moe.py                   # IntegratedMoE (images) + token-level MoEFeedForward
 │   ├── phase.py                 # Sparse Fourier Phase Transformer
 │   ├── phase_symbolic.py        # Hybrid Phase-Symbolic (ARC)
 │   ├── clip.py                  # CLIP encoders + contrastive loss
@@ -285,14 +314,15 @@ nano_moe/
 │   ├── diffusion.py             # DDPM, LDM, dual oscillation
 │   └── multimodal.py            # Unified multimodal model
 │
-├── data/
+├── datasets/
 │   ├── loaders.py               # Image datasets (MNIST, CIFAR)
-│   ├── text.py                  # BPE text loaders
+│   ├── text.py                  # GPT-2 BPE (HF) and local char-level text loaders
 │   └── arc.py                   # ARC-AGI dataset
 │
 ├── training/
 │   ├── trainer.py               # Training loops
 │   ├── tracker.py               # Experiment tracking
+│   ├── checkpoint.py            # save_checkpoint / load_checkpoint
 │   ├── monitor.py               # Rich logging
 │   ├── optimizer.py             # PhaseSignSGD
 │   ├── rl.py                    # GRPO, Reward Model
@@ -318,7 +348,7 @@ Makefile                         # Quick command shortcuts
 
 | Task | Input | Output | Model | Demo |
 |------|-------|--------|-------|------|
-| **Text Generation** | Text prompt | Continuation | SFPT | `make demo-shakespeare` |
+| **Text Generation** | Text prompt | Continuation | GPT-style transformer (optional MoE FFN) | `make demo-shakespeare` |
 | **Abstract Reasoning** | Input/output grids | Transform program | Phase-Symbolic | `make demo-arc` |
 | **Vision-Language Retrieval** | Image or text | Matching text/image | CLIP | `make demo-clip` |
 | **Text-to-Image** | Text description | Generated image | DDPM/LDM | `make demo-diffusion` |

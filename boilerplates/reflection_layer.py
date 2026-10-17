@@ -1245,7 +1245,7 @@ def main(argv=None):
         console.print(Panel(f"Results packaged: {zip_path}", title="Complete"))
 
     elif args.mode == "infer":
-        payload = torch.load(args.load_path, map_location=device)
+        payload = torch.load(args.load_path, map_location=device, weights_only=True)
         cfg = GPTCfg(**payload["cfg"])
         model = ReflectiveNanoGPT(cfg)
         model.load_state_dict(payload["state_dict"])
@@ -1385,7 +1385,7 @@ def compare_models():
         if not os.path.exists(path):
             continue
         
-        payload = torch.load(path, map_location=device)
+        payload = torch.load(path, map_location=device, weights_only=True)
         cfg = GPTCfg(**payload["cfg"])
         model = ReflectiveNanoGPT(cfg)
         model.load_state_dict(payload["state_dict"])

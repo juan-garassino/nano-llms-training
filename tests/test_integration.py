@@ -1,6 +1,7 @@
 import sys
 import os
-import torch
+import pytest
+import torch  # noqa: F401
 
 # Ensure we can import nano_moe
 sys.path.append(os.getcwd())
@@ -8,6 +9,14 @@ sys.path.append(os.getcwd())
 from nano_moe.config import TrainingConfig
 from nano_moe.datasets.loaders import get_multimnist_loaders
 from nano_moe.main import main
+
+# These run full training and download GPT-2 tokenizer / datasets from the
+# network, so they are opt-in: set NANO_MOE_NETWORK_TESTS=1 to run them.
+pytestmark = pytest.mark.skipif(
+    os.environ.get("NANO_MOE_NETWORK_TESTS") != "1",
+    reason="network/data-heavy integration tests; set NANO_MOE_NETWORK_TESTS=1",
+)
+
 
 def test_universal_phase():
     print("\n=== Testing Universal SFPT Integration ===")
@@ -25,6 +34,7 @@ def test_universal_phase():
         print(f"❌ Universal SFPT Integration Test Failed: {e}")
         import traceback
         traceback.print_exc()
+        raise
 
 def test_true_phase():
     print("\n=== Testing True Holographic SFPT Integration ===")
@@ -42,11 +52,8 @@ def test_true_phase():
         print(f"❌ True Holographic SFPT Integration Test Failed: {e}")
         import traceback
         traceback.print_exc()
+        raise
 
-if __name__ == "__main__":
-    test_universal_phase()
-    test_true_phase()
-    test_quantum_diffusion()
 
 def test_quantum_diffusion():
     print("\n=== Testing Quantum Diffusion ARC Integration ===")
@@ -62,3 +69,10 @@ def test_quantum_diffusion():
         print(f"❌ Quantum Diffusion ARC Integration Test Failed: {e}")
         import traceback
         traceback.print_exc()
+        raise
+
+
+if __name__ == "__main__":
+    test_universal_phase()
+    test_true_phase()
+    test_quantum_diffusion()

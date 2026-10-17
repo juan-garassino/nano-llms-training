@@ -107,7 +107,7 @@ def distill_student(student, teacher_ckpt, train_loader, epochs=1, alpha=0.5,
     teacher = vgg16(weights=None)
     in_features = teacher.classifier[6].in_features
     teacher.classifier[6] = nn.Linear(in_features, 20)
-    teacher.load_state_dict(torch.load(teacher_ckpt, map_location=device))
+    teacher.load_state_dict(torch.load(teacher_ckpt, map_location=device, weights_only=True))
     teacher.eval()
     for p in teacher.parameters():
         p.requires_grad_(False)

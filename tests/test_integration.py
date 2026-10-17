@@ -1,7 +1,7 @@
 import sys
 import os
 import pytest
-import torch  # noqa: F401
+torch = pytest.importorskip("torch")
 
 # Ensure we can import nano_moe
 sys.path.append(os.getcwd())

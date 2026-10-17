@@ -45,9 +45,6 @@ def train_epoch(model, loaders, optimizer, criterion, device, dataset_names, tra
             # Check if model is SFPT and we are doing text generation (dataset_names[0] is text)
             # We can infer from logits shape.
             
-            # For SFPT text, we pass classification=False
-            is_text_gen = (logits.dim() == 3) if 'logits' in locals() else False # Can't check before forward
-            
             # We need to pass classification=False if it's text.
             # But train_epoch is generic.
             # Let's check if the model has 'classification' arg in forward.
@@ -113,7 +110,10 @@ def eval_model(model, loaders, device, dataset_names):
                  if y.dim() == 2:
                      kwargs['classification'] = False
             
-            logits, _, _ = model(x, **kwargs)
+            # Models return either 3-tuples (moe/sfpt) or 6-tuples
+            # (SimpleTransformer, true/universal phase); logits always come first.
+            out = model(x, **kwargs)
+            logits = out[0] if isinstance(out, (tuple, list)) else out
             
             if logits.dim() == 3: # Sequence
                 pred = logits.argmax(2) # (B, L)

@@ -80,7 +80,7 @@ def main(cfg: Optional[TrainingConfig] = None):
         ).to(device)
     elif cfg.model_type == "universal_phase":
         model = UniversalSFPT(
-            vocab_size=vocab_size,
+            vocab_size=num_classes,
             layers=cfg.depth,
             dim=cfg.feature_dim,
             freqs=cfg.n_freqs,

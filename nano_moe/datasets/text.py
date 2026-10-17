@@ -16,7 +16,9 @@ class TextDataset(Dataset):
         self.seq_len = seq_len
         
     def __len__(self):
-        return len(self.tokens) // self.seq_len
+        # Each item needs seq_len + 1 tokens (input + shifted target), so the
+        # last usable start index must leave one extra token after the window.
+        return max(0, (len(self.tokens) - 1) // self.seq_len)
     
     def __getitem__(self, idx):
         # Simple chunking

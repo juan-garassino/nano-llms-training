@@ -16392,7 +16392,31 @@ def main(argv=None):
         # 🔧 Apply quantization for inference
         model = apply_quantization(model, args.quantize)
 
-        sample_lm(model, tok, device, start=args.sample_start, tokens=args.sample_tokens, title="Sample")
+        # Dispatch the inference flags (previously all ignored: every call fell through to sample_lm).
+        if args.quantize == "int8_dynamic": device = "cpu"  # dynamic int8 kernels are CPU-only
+        model = model.to(device).eval()
+        if args.kv_cache != "none":
+            info("--kv_cache is not wired into decoding: the cached path (generate_standard + KVCache) "
+                 "is a known issue, see CLAUDE.md. Decoding without a cache.", "Inference", "yellow")
+        start_ids = tok.encode(args.sample_start)
+        if args.ttc:
+            out, title = generate_adaptive(model, start_ids, max_new=args.sample_tokens, device=device), "Adaptive TTC"
+        elif args.active:
+            out = start_ids
+            for _ in range(args.sample_tokens):
+                out = generate_active_inference(model, out, device=device)
+            title = "Active Inference (toy)"
+        elif args.system2:
+            out, title = system2_reasoning(model, tok, args.sample_start, device=device), "System-2 (toy)"
+        elif args.speculative:
+            # toy: no separate draft checkpoint exists, so the model drafts for itself
+            out = speculative_decoding(model, model, start_ids, max_new=args.sample_tokens, device=device)
+            title = "Speculative (toy, self-draft)"
+        else:
+            out = None
+            sample_lm(model, tok, device, start=args.sample_start, tokens=args.sample_tokens, title="Sample")
+        if out is not None:
+            print(f"\n[{title}]\n{tok.decode(out)}")
 
     else:
         raise NotImplementedError(f"Mode {args.mode} not yet implemented in this demo")

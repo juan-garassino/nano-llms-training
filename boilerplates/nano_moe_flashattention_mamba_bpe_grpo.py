@@ -15915,24 +15915,29 @@ class KVCache:
     """Simple KV cache with dtype=fp16 or int8 quantized storage."""
     def __init__(self, mode="fp16"):
         self.mode = mode; self.k = None; self.v = None; self.scale = None
+    @staticmethod
+    def _q8(x, s):  # symmetric int8: x/s in [-1,1] mapped to [-127,127] (was truncated to {-1,0,1})
+        return (x / s * 127.0).round().clamp_(-127, 127).to(torch.int8)
     def append_and_get(self, k, v):  # k,v: [B,H,T,d]
-        if self.k is None:
-            if self.mode == "int8":
-                s = k.abs().amax(dim=(-2,-1), keepdim=True).clamp_min(1e-6)
-                self.k = (k / s).to(torch.int8); self.v = (v / s).to(torch.int8); self.scale = s
+        if self.mode == "int8":
+            sk = k.abs().amax(dim=(-2,-1), keepdim=True).clamp_min(1e-6)
+            sv = v.abs().amax(dim=(-2,-1), keepdim=True).clamp_min(1e-6)  # V gets its own scale
+            if self.k is None:
+                self.k, self.v, self.scale, self.scale_v = self._q8(k, sk), self._q8(v, sv), sk, sv
             else:
-                self.k, self.v = k.half(), v.half()
+                nk, nv = torch.maximum(self.scale, sk), torch.maximum(self.scale_v, sv)
+                # re-quantise earlier entries at the (possibly grown) scale before appending
+                old_k = self.k.float() * self.scale / 127.0; old_v = self.v.float() * self.scale_v / 127.0
+                self.k = torch.cat([self._q8(old_k, nk), self._q8(k, nk)], dim=-2)
+                self.v = torch.cat([self._q8(old_v, nv), self._q8(v, nv)], dim=-2)
+                self.scale, self.scale_v = nk, nv
+        elif self.k is None:
+            self.k, self.v = k.half(), v.half()
         else:
-            if self.mode == "int8":
-                s = torch.maximum(self.scale, k.abs().amax(dim=(-2,-1), keepdim=True))
-                self.k = torch.cat([self.k, (k / s).to(torch.int8)], dim=-2)
-                self.v = torch.cat([self.v, (v / s).to(torch.int8)], dim=-2)
-                self.scale = s
-            else:
-                self.k = torch.cat([self.k, k.half()], dim=-2); self.v = torch.cat([self.v, v.half()], dim=-2)
+            self.k = torch.cat([self.k, k.half()], dim=-2); self.v = torch.cat([self.v, v.half()], dim=-2)
         # dequant for attention
         if self.mode == "int8":
-            kf = self.k.float() * self.scale; vf = self.v.float() * self.scale
+            kf = self.k.float() * self.scale / 127.0; vf = self.v.float() * self.scale_v / 127.0
         else:
             kf, vf = self.k.float(), self.v.float()
         return kf, vf

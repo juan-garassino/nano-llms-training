@@ -16320,9 +16320,9 @@ def main(argv=None):
         # train, val = load_dataset()
 
         # Load TinyStories (requires tinystories_train.csv and tinystories_val.csv in ./data)
-        train, val = load_dataset(use_tinystories=True,
-                                  train_csv="tinystories_train.csv",
-                                  val_csv="tinystories_val.csv")
+        train_txt, val_txt = load_dataset(use_tinystories=True,
+                                          train_csv="tinystories_train.csv",
+                                          val_csv="tinystories_val.csv")
 
         tok, tok_model_path, vocab_size_actual = train_or_load_tokenizer(
             args.tok_kind, args.vocab_size, train_txt + val_txt, args.tok_prefix, verbose=True
